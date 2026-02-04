@@ -1,0 +1,70 @@
+services:
+  traefik:
+    image: traefik:v2.11
+    command: --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "8080:8080" # dashboard
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    depends_on:
+      - api-blue
+    networks:
+      - appnet
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - appnet
+
+  notify-service:
+    build:
+      context: ../notify-service
+    environment:
+      BUG_MODE: "false"
+      DELAY_MS: "0"
+    networks:
+      - appnet
+
+  api-blue:
+    build:
+      context: ../api-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/appdb
+      DB_USER: appuser
+      DB_PASS: apppass
+      NOTIFY_BASE_URL: http://notify-service:8081
+    depends_on:
+      - postgres
+      - notify-service
+    networks:
+      - appnet
+
+  # Green je inicijalno ugašen (compose profile)
+  api-green:
+    build:
+      context: ../api-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/appdb
+      DB_USER: appuser
+      DB_PASS: apppass
+      NOTIFY_BASE_URL: http://notify-service:8081
+    depends_on:
+      - postgres
+      - notify-service
+    networks:
+      - appnet
+    profiles: ["green"]
+
+networks:
+  appnet:
+
+volumes:
+  pgdata:

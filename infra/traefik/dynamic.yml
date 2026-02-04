@@ -1,0 +1,17 @@
+http:
+  routers:
+    api:
+      rule: "PathPrefix(`/`)"
+      entryPoints: ["web"]
+      service: api-blue
+
+  services:
+    api-blue:
+      loadBalancer:
+        servers:
+          - url: "http://api-blue:8080"
+
+    api-green:
+      loadBalancer:
+        servers:
+          - url: "http://api-green:8080"
