@@ -27,6 +27,4 @@ public class ItemController {
         if (name.isEmpty()) throw new IllegalArgumentException("name is required");
         return repo.save(new Item(name));
     }
-
-//v1.4
 }
