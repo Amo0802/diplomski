@@ -1,5 +1,7 @@
 package com.example.diplomski;
 
+import com.example.diplomski.model.Item;
+import com.example.diplomski.repo.ItemRepo;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
@@ -9,6 +11,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/items")
 public class ItemController {
+
     private final ItemRepo repo;
 
     public ItemController(ItemRepo repo) {

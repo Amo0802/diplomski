@@ -1,5 +1,6 @@
 package com.example.diplomski;
 
+import com.example.diplomski.notify.NotifyClient;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;

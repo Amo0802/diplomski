@@ -1,4 +1,4 @@
-package com.example.diplomski;
+package com.example.diplomski.notify;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;

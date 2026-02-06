@@ -1,4 +1,4 @@
-package com.example.diplomski;
+package com.example.diplomski.model;
 
 import jakarta.persistence.*;
 
