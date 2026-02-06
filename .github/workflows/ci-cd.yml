@@ -1,4 +1,5 @@
-name: CI/CD Pipeline
+
+name: "Exp3 – Full rebuild (oba servisa)"
 
 on:
   workflow_dispatch:
@@ -12,33 +13,29 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      # ── 1. Checkout ────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. JDK + Maven cache ──────────────────────────────
       - name: Set up JDK 21 with Maven cache
         uses: actions/setup-java@v4
         with:
           java-version: "21"
           distribution: "temurin"
-          cache: "maven"   # <-- KLJUCNA RAZLIKA: aktivira Maven dependency cache
+          cache: "maven"
 
-      # ── 3. Build api-service ───────────────────────────────
+      # Uvijek rebuilda OBA servisa, bez obzira sta je izmijenjeno
       - name: Build api-service
         run: |
           cd api-service
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
-      # ── 4. Build notify-service ────────────────────────────
       - name: Build notify-service
         run: |
           cd notify-service
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
-      # ── 5. Deploy na server (sa Docker cache) ─────────────
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -49,11 +46,9 @@ jobs:
             cd /opt/diplomski
             git pull origin master
             cd infra
-            # BEZ --no-cache: Docker koristi layer cache
             docker compose build
             docker compose up -d
 
-      # ── 6. Verifikacija ───────────────────────────────────
       - name: Verify deployment
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -61,7 +56,6 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            echo "Cekam da servis postane dostupan..."
             for i in $(seq 1 30); do
               if curl -sf http://localhost/actuator/health > /dev/null 2>&1; then
                 echo "Servis dostupan nakon ${i} sekundi"
@@ -72,10 +66,8 @@ jobs:
             echo "GRESKA: Servis nije dostupan nakon 60s"
             exit 1
 
-      # ── 7. Summary ────────────────────────────────────────
       - name: Print summary
         run: |
           echo "============================================"
-          echo " Eksperiment 3 - Optimized - Run #${{ github.event.inputs.run_number }}"
-          echo " Provjeri 'Job summary' za vremena po koracima"
+          echo " Eksperiment 3 - Full Rebuild - Run #${{ github.event.inputs.run_number }}"
           echo "============================================"
