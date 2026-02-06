@@ -1,5 +1,4 @@
-
-name: "Exp3 – Full rebuild (oba servisa)"
+name: CI/CD Pipeline
 
 on:
   workflow_dispatch:
@@ -10,7 +9,37 @@ on:
         default: "1"
 
 jobs:
-  build-and-deploy:
+  # ── Job 1: Detektuj koje servise treba rebuildat ────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api-changed: ${{ steps.filter.outputs.api }}
+      notify-changed: ${{ steps.filter.outputs.notify }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # treba bar 2 commit-a za diff
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            api:
+              - 'api-service/**'
+            notify:
+              - 'notify-service/**'
+
+      - name: Print detected changes
+        run: |
+          echo "api-service changed: ${{ steps.filter.outputs.api }}"
+          echo "notify-service changed: ${{ steps.filter.outputs.notify }}"
+
+  # ── Job 2: Build api-service (samo ako je izmijenjen) ───
+  build-api:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.api-changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -23,18 +52,45 @@ jobs:
           distribution: "temurin"
           cache: "maven"
 
-      # Uvijek rebuilda OBA servisa, bez obzira sta je izmijenjeno
       - name: Build api-service
         run: |
           cd api-service
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
+  # ── Job 3: Build notify-service (samo ako je izmijenjen) ─
+  build-notify:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.notify-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 with Maven cache
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: "maven"
+
       - name: Build notify-service
         run: |
           cd notify-service
           chmod +x mvnw
           ./mvnw clean package -DskipTests
+
+  # ── Job 4: Deploy (ceka sve buildove koji su pokrenuti) ──
+  deploy:
+    needs: [detect-changes, build-api, build-notify]
+    # Pokreni deploy cak i ako je jedan build preskocen
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print what was built
+        run: |
+          echo "api-service built: ${{ needs.detect-changes.outputs.api-changed }}"
+          echo "notify-service built: ${{ needs.detect-changes.outputs.notify-changed }}"
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
@@ -46,7 +102,21 @@ jobs:
             cd /opt/diplomski
             git pull origin master
             cd infra
-            docker compose build
+
+            # Rebuilda samo izmijenjene servise na serveru
+            API_CHANGED="${{ needs.detect-changes.outputs.api-changed }}"
+            NOTIFY_CHANGED="${{ needs.detect-changes.outputs.notify-changed }}"
+
+            if [ "$API_CHANGED" = "true" ]; then
+              echo ">> Rebuilding api-blue..."
+              docker compose build api-blue
+            fi
+
+            if [ "$NOTIFY_CHANGED" = "true" ]; then
+              echo ">> Rebuilding notify-service..."
+              docker compose build notify-service
+            fi
+
             docker compose up -d
 
       - name: Verify deployment
@@ -69,5 +139,7 @@ jobs:
       - name: Print summary
         run: |
           echo "============================================"
-          echo " Eksperiment 3 - Full Rebuild - Run #${{ github.event.inputs.run_number }}"
+          echo " Eksperiment 3 - Selective Build - Run #${{ github.event.inputs.run_number }}"
+          echo " api built: ${{ needs.detect-changes.outputs.api-changed }}"
+          echo " notify built: ${{ needs.detect-changes.outputs.notify-changed }}"
           echo "============================================"
