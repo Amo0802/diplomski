@@ -16,13 +16,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. JDK (bez Maven cache-a) ────────────────────────
-      - name: Set up JDK 21
+      # ── 2. JDK + Maven cache ──────────────────────────────
+      - name: Set up JDK 21 with Maven cache
         uses: actions/setup-java@v4
         with:
           java-version: "21"
           distribution: "temurin"
-          # NAPOMENA: NEMA cache: 'maven' — to je poenta baseline-a
+          cache: "maven"   # <-- KLJUCNA RAZLIKA: aktivira Maven dependency cache
 
       # ── 3. Build api-service ───────────────────────────────
       - name: Build api-service
@@ -38,7 +38,7 @@ jobs:
           chmod +x mvnw
           ./mvnw clean package -DskipTests
 
-      # ── 5. Deploy na server ────────────────────────────────
+      # ── 5. Deploy na server (sa Docker cache) ─────────────
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -49,10 +49,11 @@ jobs:
             cd /opt/diplomski
             git pull origin master
             cd infra
-            docker compose build --no-cache
+            # BEZ --no-cache: Docker koristi layer cache
+            docker compose build
             docker compose up -d
 
-      # ── 6. Verifikacija deployementa ───────────────────────
+      # ── 6. Verifikacija ───────────────────────────────────
       - name: Verify deployment
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -71,10 +72,10 @@ jobs:
             echo "GRESKA: Servis nije dostupan nakon 60s"
             exit 1
 
-      # ── 7. Ispis summary-ja ────────────────────────────────
+      # ── 7. Summary ────────────────────────────────────────
       - name: Print summary
         run: |
           echo "============================================"
-          echo " Eksperiment 3 - Baseline - Run #${{ github.event.inputs.run_number }}"
+          echo " Eksperiment 3 - Optimized - Run #${{ github.event.inputs.run_number }}"
           echo " Provjeri 'Job summary' za vremena po koracima"
           echo "============================================"
