@@ -104,7 +104,7 @@ jobs:
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d
 
-      - name: Health check - actuator (10x, every 5s)
+      - name: Health check - actuator (10x, every 2s)
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
         run: |
@@ -121,7 +121,7 @@ jobs:
           echo "Actuator health check FAILED after 10 attempts"
           exit 1
 
-      - name: Health check - notifycheck (10x, every 5s)
+      - name: Health check - notifycheck (10x, every 2s)
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
         run: |
