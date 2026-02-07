@@ -1,7 +1,7 @@
-package com.example.diplomski;
+package com.example.api;
 
-import com.example.diplomski.model.Item;
-import com.example.diplomski.repo.ItemRepo;
+import com.example.api.model.Item;
+import com.example.api.repo.ItemRepo;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 

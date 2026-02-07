@@ -4,7 +4,7 @@ services:
     command: --configFile=/etc/traefik/traefik.yml
     ports:
       - "80:80"
-      - "8080:8080" # dashboard
+      - "8080:8080"
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
@@ -41,6 +41,7 @@ services:
       DB_USER: appuser
       DB_PASS: apppass
       NOTIFY_BASE_URL: http://notify-service:8081
+      SERVICE_VERSION: blue
     depends_on:
       - postgres
       - notify-service
@@ -56,6 +57,7 @@ services:
       DB_USER: appuser
       DB_PASS: apppass
       NOTIFY_BASE_URL: http://notify-service:8081
+      SERVICE_VERSION: green
     depends_on:
       - postgres
       - notify-service

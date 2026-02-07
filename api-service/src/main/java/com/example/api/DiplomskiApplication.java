@@ -1,12 +1,10 @@
-package com.example.diplomski;
+package com.example.api;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
 public class DiplomskiApplication {
-
-	//Eksperiment 3 faza b
 
 	public static void main(String[] args) {
 		SpringApplication.run(DiplomskiApplication.class, args);
