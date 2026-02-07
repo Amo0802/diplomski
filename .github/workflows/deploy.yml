@@ -104,9 +104,6 @@ jobs:
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d
 
-      - name: Wait for services to start
-        run: sleep 30
-
       - name: Health check - actuator (10x, every 5s)
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -119,7 +116,7 @@ jobs:
            echo "Actuator health check passed"
            exit 0
           fi
-          sleep 5
+          sleep 2
           done
           echo "Actuator health check FAILED after 10 attempts"
           exit 1
@@ -136,7 +133,7 @@ jobs:
               echo "Notify check passed"
               exit 0
             fi
-            sleep 5
+            sleep 2
           done
           echo "Notify check FAILED after 10 attempts"
           exit 1
