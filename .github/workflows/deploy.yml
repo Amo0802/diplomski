@@ -1,0 +1,142 @@
+name: CI/CD Deploy
+
+on:
+  push:
+    branches: [master]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/amo0802
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build & test api-service
+        run: mvn -f api-service/pom.xml -q verify
+
+      - name: Build & test notify-service
+        run: mvn -f notify-service/pom.xml -q verify
+
+      - name: Upload api-service JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target/*.jar
+
+      - name: Upload notify-service JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: notify-service-jar
+          path: notify-service/target/*.jar
+
+  docker-push:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download api-service JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target
+
+      - name: Download notify-service JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: notify-service-jar
+          path: notify-service/target
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Build & push api-service image
+        run: |
+          docker build -f api-service/Dockerfile.ci -t ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }} -t ${{ env.IMAGE_PREFIX }}/api-service:latest api-service
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }}
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:latest
+
+      - name: Build & push notify-service image
+        run: |
+          docker build -f notify-service/Dockerfile.ci -t ${{ env.IMAGE_PREFIX }}/notify-service:${{ env.SHORT_SHA }} -t ${{ env.IMAGE_PREFIX }}/notify-service:latest notify-service
+          docker push ${{ env.IMAGE_PREFIX }}/notify-service:${{ env.SHORT_SHA }}
+          docker push ${{ env.IMAGE_PREFIX }}/notify-service:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: docker-push
+    steps:
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            cd /opt/diplomski/infra
+            export IMAGE_TAG=${{ env.SHORT_SHA }}
+            docker compose -f docker-compose.yml pull
+            docker compose -f docker-compose.yml up -d
+
+      - name: Wait for services to start
+        run: sleep 30
+
+      - name: Health check - actuator (10x, every 5s)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -e
+          URL="http://${VPS_HOST}/actuator/health"
+          for i in $(seq 1 10); do
+          echo "[$i/10] Checking: $URL"
+          if curl -fsS "$URL" >/dev/null; then
+           echo "Actuator health check passed"
+           exit 0
+          fi
+          sleep 5
+          done
+          echo "Actuator health check FAILED after 10 attempts"
+          exit 1
+
+      - name: Health check - notifycheck (10x, every 5s)
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -e
+          URL="http://${VPS_HOST}/notifycheck"
+          for i in $(seq 1 10); do
+            echo "[$i/10] Checking: $URL"
+            if curl -fsS "$URL" >/dev/null; then
+              echo "Notify check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Notify check FAILED after 10 attempts"
+          exit 1

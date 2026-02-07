@@ -12,7 +12,7 @@ import java.util.Map;
 @RequestMapping("/items")
 public class ItemController {
 
-    //Test 1 manuel, servisi su up and running
+    //Test 1 cicd eks 1
 
     private final ItemRepo repo;
 
