@@ -25,17 +25,12 @@ services:
       - appnet
 
   notify-service:
-    build:
-      context: ../notify-service
-    environment:
-      BUG_MODE: "false"
-      DELAY_MS: "0"
+    image: ghcr.io/amo0802/notify-service:latest
     networks:
       - appnet
 
   api-blue:
-    build:
-      context: ../api-service
+    image: ghcr.io/amo0802/api-service:latest
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/appdb
       DB_USER: appuser
@@ -63,7 +58,7 @@ services:
       - notify-service
     networks:
       - appnet
-    profiles: ["green"]
+    profiles: [ "green" ]
 
 networks:
   appnet:
