@@ -12,6 +12,8 @@ import java.util.Map;
 @RequestMapping("/items")
 public class ItemController {
 
+    //Test 1 manuel, servisi su up and running
+
     private final ItemRepo repo;
 
     public ItemController(ItemRepo repo) {
