@@ -21,7 +21,7 @@ public class NotifyCheckController {
     public ResponseEntity<Map<String, Object>> checkNotify() {
         try {
             ResponseEntity<Map> response = restTemplate.getForEntity(
-                    notifyBaseUrl + "/health-buggy",
+                    notifyBaseUrl + "/health",
                     Map.class
             );
 
