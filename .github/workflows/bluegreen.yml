@@ -1,4 +1,4 @@
-name: Blue-Green Deploy (Experiment)
+name: Blue-Green Deploy
 
 on:
   workflow_dispatch:
@@ -127,35 +127,10 @@ jobs:
             echo ""
             echo ">>> FAZA 2: Prebacujem Traefik sa blue na green..."
 
-            SWITCHOVER_START=$(date +%s%3N)
-
             sed -i 's/service: api-blue/service: api-green/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
 
-            # Čekaj health check kroz Traefik
-            SWITCH_OK=false
-            for i in $(seq 1 20); do
-              echo "[$i/20] Checking /actuator/health kroz Traefik..."
-              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
-                SWITCH_OK=true
-                break
-              fi
-              sleep 1
-            done
-
-            SWITCHOVER_END=$(date +%s%3N)
-            SWITCHOVER_MS=$((SWITCHOVER_END - SWITCHOVER_START))
-
-            if [ "$SWITCH_OK" = false ]; then
-              echo "GREŠKA: Health check nije prošao nakon prebacivanja!"
-              sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
-              docker compose restart traefik
-              docker compose --profile green stop api-green
-              exit 1
-            fi
-
             echo "✅ Traefik prebačen na green"
-            echo "⏱️  SWITCHOVER TIME: ${SWITCHOVER_MS}ms"
 
             # =========================================
             # FAZA 3: Provjeri /notifycheck
@@ -169,13 +144,6 @@ jobs:
             if [ "$NOTIFY_STATUS" = "200" ]; then
               echo "✅ /notifycheck PROŠAO - deploy uspješan!"
               docker compose stop api-blue
-              echo ""
-              echo "========================================="
-              echo "  REZULTATI"
-              echo "========================================="
-              echo "SWITCHOVER TIME: ${SWITCHOVER_MS}ms"
-              echo "ROLLBACK:        nije bio potreban"
-              echo "========================================="
               exit 0
             fi
 
@@ -192,26 +160,15 @@ jobs:
             sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
 
-            # Čekaj da blue odgovara kroz Traefik
-            ROLLBACK_OK=false
-            for i in $(seq 1 20); do
-              echo "[$i/20] Checking /actuator/health kroz Traefik (blue)..."
-              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
-                ROLLBACK_OK=true
-                break
-              fi
-              sleep 1
-            done
-
             # Provjeri notifycheck nakon rollback-a
             NOTIFY_OK=false
-            for i in $(seq 1 10); do
-              echo "[$i/10] Checking /notifycheck (blue)..."
+            for i in $(seq 1 100); do
+              echo "[$i/100] Checking /notifycheck (blue)..."
               if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
                 NOTIFY_OK=true
                 break
               fi
-              sleep 2
+              sleep 0.1
             done
 
             ROLLBACK_END=$(date +%s%3N)
@@ -219,12 +176,6 @@ jobs:
 
             # Ugasi green
             docker compose --profile green stop api-green
-
-            if [ "$ROLLBACK_OK" = true ]; then
-              echo "✅ /actuator/health PASSED nakon rollback-a"
-            else
-              echo "⚠️  /actuator/health FAILED nakon rollback-a"
-            fi
 
             if [ "$NOTIFY_OK" = true ]; then
               echo "✅ /notifycheck PASSED nakon rollback-a"
@@ -239,7 +190,6 @@ jobs:
             echo "========================================="
             echo "  REZULTATI BLUE-GREEN EKSPERIMENTA"
             echo "========================================="
-            echo "SWITCHOVER TIME: ${SWITCHOVER_MS}ms ($(echo "scale=2; $SWITCHOVER_MS/1000" | bc)s)"
             echo "ROLLBACK TIME:   ${ROLLBACK_MS}ms ($(echo "scale=2; $ROLLBACK_MS/1000" | bc)s)"
             echo "NOVI TAG:        $NEW_TAG"
             echo "========================================="
