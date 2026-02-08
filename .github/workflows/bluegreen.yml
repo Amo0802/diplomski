@@ -129,6 +129,7 @@ jobs:
 
             sed -i 's/service: api-blue/service: api-green/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
+            sleep 1
 
             echo "✅ Traefik prebačen na green"
 
