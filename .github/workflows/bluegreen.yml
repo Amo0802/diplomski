@@ -156,41 +156,10 @@ jobs:
             echo ""
             echo ">>> FAZA 4: Rollback - prebacujem Traefik nazad na blue..."
 
-            ROLLBACK_START=$(date +%s%3N)
-
             sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
-
-            # Provjeri notifycheck nakon rollback-a
-            NOTIFY_OK=false
-            for i in $(seq 1 100); do
-              echo "[$i/100] Checking /notifycheck (blue)..."
-              if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
-                NOTIFY_OK=true
-                break
-              fi
-              sleep 0.1
-            done
-
-            ROLLBACK_END=$(date +%s%3N)
-            ROLLBACK_MS=$((ROLLBACK_END - ROLLBACK_START))
 
             # Ugasi green
             docker compose --profile green stop api-green
 
-            if [ "$NOTIFY_OK" = true ]; then
-              echo "✅ /notifycheck PASSED nakon rollback-a"
-            else
-              echo "⚠️  /notifycheck FAILED nakon rollback-a"
-            fi
-
-            # =========================================
-            # REZULTATI
-            # =========================================
-            echo ""
-            echo "========================================="
-            echo "  REZULTATI BLUE-GREEN EKSPERIMENTA"
-            echo "========================================="
-            echo "ROLLBACK TIME:   ${ROLLBACK_MS}ms ($(echo "scale=2; $ROLLBACK_MS/1000" | bc)s)"
-            echo "NOVI TAG:        $NEW_TAG"
             echo "========================================="
