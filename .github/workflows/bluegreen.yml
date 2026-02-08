@@ -92,16 +92,6 @@ jobs:
             NEW_TAG="${{ env.SHORT_SHA }}"
             echo "Novi image tag: $NEW_TAG"
 
-            # Helper: curl sa ispisom X-Service-Version headera
-            check_url() {
-              local URL=$1
-              local LABEL=$2
-              local STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
-              local VERSION=$(curl -sI "$URL" 2>/dev/null | grep -i "X-Service-Version" | tr -d '\r' || echo "N/A")
-              echo "[$LABEL] HTTP=$STATUS | $VERSION"
-              echo "$STATUS"
-            }
-
             # =========================================
             # FAZA 1: Podigni green sa novim image-om
             # =========================================
@@ -112,12 +102,11 @@ jobs:
             docker compose pull api-green
             docker compose --profile green up -d api-green
 
-            # Čekaj da green bude zdrav interno (direktno na kontejner)
+            # Čekaj da green bude zdrav interno
             GREEN_HEALTHY=false
             for i in $(seq 1 30); do
-              RESULT=$(check_url "http://localhost:8080/actuator/health" "green-interno")
               echo "[$i/30] Green health check..."
-              if [ "$RESULT" = "200" ]; then
+              if docker compose exec -T api-green curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
                 GREEN_HEALTHY=true
                 break
               fi
@@ -140,7 +129,6 @@ jobs:
 
             SWITCHOVER_START=$(date +%s%3N)
 
-            # Zamijeni service u dynamic.yml i restartuj Traefik
             sed -i 's/service: api-blue/service: api-green/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
 
@@ -148,8 +136,7 @@ jobs:
             SWITCH_OK=false
             for i in $(seq 1 20); do
               echo "[$i/20] Checking /actuator/health kroz Traefik..."
-              RESULT=$(check_url "http://localhost/actuator/health" "actuator")
-              if [ "$RESULT" = "200" ]; then
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
                 SWITCH_OK=true
                 break
               fi
@@ -176,7 +163,8 @@ jobs:
             echo ""
             echo ">>> FAZA 3: Provjera /notifycheck..."
 
-            NOTIFY_STATUS=$(check_url "http://localhost/notifycheck" "notifycheck")
+            NOTIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/notifycheck || true)
+            echo "/notifycheck HTTP status: $NOTIFY_STATUS"
 
             if [ "$NOTIFY_STATUS" = "200" ]; then
               echo "✅ /notifycheck PROŠAO - deploy uspješan!"
@@ -201,7 +189,6 @@ jobs:
 
             ROLLBACK_START=$(date +%s%3N)
 
-            # Vrati Traefik na blue
             sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
             docker compose restart traefik
 
@@ -209,8 +196,7 @@ jobs:
             ROLLBACK_OK=false
             for i in $(seq 1 20); do
               echo "[$i/20] Checking /actuator/health kroz Traefik (blue)..."
-              RESULT=$(check_url "http://localhost/actuator/health" "actuator")
-              if [ "$RESULT" = "200" ]; then
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
                 ROLLBACK_OK=true
                 break
               fi
@@ -221,8 +207,7 @@ jobs:
             NOTIFY_OK=false
             for i in $(seq 1 10); do
               echo "[$i/10] Checking /notifycheck (blue)..."
-              RESULT=$(check_url "http://localhost/notifycheck" "notifycheck")
-              if [ "$RESULT" = "200" ]; then
+              if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
                 NOTIFY_OK=true
                 break
               fi
