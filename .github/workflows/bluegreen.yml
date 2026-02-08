@@ -1,4 +1,4 @@
-name: Blue-Green Deploy
+name: Blue-Green Deploy (Experiment)
 
 on:
   workflow_dispatch:
@@ -112,11 +112,12 @@ jobs:
             docker compose pull api-green
             docker compose --profile green up -d api-green
 
-            # Čekaj da green bude zdrav interno (direktno na kontejner port)
+            # Čekaj da green bude zdrav interno (direktno na kontejner)
             GREEN_HEALTHY=false
             for i in $(seq 1 30); do
-              echo "[$i/30] Checking green health (interno)..."
-              if docker compose exec -T api-green curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
+              RESULT=$(check_url "http://localhost:8080/actuator/health" "green-interno")
+              echo "[$i/30] Green health check..."
+              if [ "$RESULT" = "200" ]; then
                 GREEN_HEALTHY=true
                 break
               fi
@@ -139,10 +140,11 @@ jobs:
 
             SWITCHOVER_START=$(date +%s%3N)
 
-            # Zamijeni service u dynamic.yml
+            # Zamijeni service u dynamic.yml i restartuj Traefik
             sed -i 's/service: api-blue/service: api-green/' /opt/diplomski/infra/traefik/dynamic.yml
+            docker compose restart traefik
 
-            # Traefik watch detektuje promjenu, čekaj health check kroz Traefik
+            # Čekaj health check kroz Traefik
             SWITCH_OK=false
             for i in $(seq 1 20); do
               echo "[$i/20] Checking /actuator/health kroz Traefik..."
@@ -159,8 +161,8 @@ jobs:
 
             if [ "$SWITCH_OK" = false ]; then
               echo "GREŠKA: Health check nije prošao nakon prebacivanja!"
-              # Rollback Traefik na blue
               sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
+              docker compose restart traefik
               docker compose --profile green stop api-green
               exit 1
             fi
@@ -178,7 +180,6 @@ jobs:
 
             if [ "$NOTIFY_STATUS" = "200" ]; then
               echo "✅ /notifycheck PROŠAO - deploy uspješan!"
-              # Ugasi stari blue
               docker compose stop api-blue
               echo ""
               echo "========================================="
@@ -202,6 +203,7 @@ jobs:
 
             # Vrati Traefik na blue
             sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
+            docker compose restart traefik
 
             # Čekaj da blue odgovara kroz Traefik
             ROLLBACK_OK=false
