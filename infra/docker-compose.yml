@@ -25,12 +25,12 @@ services:
       - appnet
 
   notify-service:
-    image: ghcr.io/amo0802/notify-service:latest
+    image: ghcr.io/amo0802/notify-service:${IMAGE_TAG:-latest}
     networks:
       - appnet
 
   api-blue:
-    image: ghcr.io/amo0802/api-service:latest
+    image: ghcr.io/amo0802/api-service:${IMAGE_TAG:-latest}
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/appdb
       DB_USER: appuser
