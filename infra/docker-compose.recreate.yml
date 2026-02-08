@@ -24,6 +24,7 @@ services:
     networks:
       - appnet
 
+  # Notify latest image, jer samo mijenjamo api servis
   notify-service:
     image: ghcr.io/amo0802/notify-service:latest
     networks:

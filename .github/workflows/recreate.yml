@@ -95,7 +95,8 @@ jobs:
             echo "Novi image tag: ${{ env.SHORT_SHA }}"
 
             # --- Pull novi image ---
-            docker pull ghcr.io/amo0802/api-service:${{ env.SHORT_SHA }}
+            export IMAGE_TAG=${{ env.SHORT_SHA }}
+            docker compose pull api-blue
 
             # =========================================
             # FAZA 1: RECREATE DEPLOY (mjerenje downtime-a)
@@ -110,7 +111,6 @@ jobs:
             DOWNTIME_START=$(date +%s%3N)
 
             # Pokreni novu verziju
-            export IMAGE_TAG=${{ env.SHORT_SHA }}
             docker compose up -d api-blue
 
             # Čekaj /actuator/health (max 30 pokušaja, svake 2s)

@@ -4,7 +4,7 @@ services:
     command: --configFile=/etc/traefik/traefik.yml
     ports:
       - "80:80"
-      - "8080:8080" # dashboard
+      - "8080:8080"
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
@@ -24,6 +24,7 @@ services:
     networks:
       - appnet
 
+  # Lokalni build
   notify-service:
     build:
       context: ../notify-service
