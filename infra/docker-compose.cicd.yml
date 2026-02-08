@@ -1,0 +1,50 @@
+services:
+  traefik:
+    image: traefik:v2.11
+    command: --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    depends_on:
+      - api-blue
+    networks:
+      - appnet
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - appnet
+
+  notify-service:
+    image: ghcr.io/amo0802/notify-service:${IMAGE_TAG:-latest}
+    networks:
+      - appnet
+
+  api-blue:
+    image: ghcr.io/amo0802/api-service:${IMAGE_TAG:-latest}
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/appdb
+      DB_USER: appuser
+      DB_PASS: apppass
+      NOTIFY_BASE_URL: http://notify-service:8081
+      SERVICE_VERSION: blue
+    depends_on:
+      - postgres
+      - notify-service
+    networks:
+      - appnet
+
+networks:
+  appnet:
+
+volumes:
+  pgdata:
