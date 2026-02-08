@@ -115,23 +115,12 @@ jobs:
             # Čekaj da green bude zdrav interno (direktno na kontejner port)
             GREEN_HEALTHY=false
             for i in $(seq 1 30); do
-            echo "[$i/30] Checking green health (interno)..."
-          
-            RESPONSE=$(docker compose exec -T api-green sh -c \
-            'curl -s -D - -o /dev/null http://localhost:8080/actuator/health' 2>/dev/null)
-          
-            HTTP_CODE=$(echo "$RESPONSE" | head -n 1 | awk '{print $2}')
-            VERSION_HEADER=$(echo "$RESPONSE" | grep -i "X-Service-Version" || echo "X-Service-Version: N/A")
-          
-            echo "   HTTP: $HTTP_CODE"
-            echo "   $VERSION_HEADER"
-          
-            if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            GREEN_HEALTHY=true
-            break
-            fi
-          
-            sleep 2
+              echo "[$i/30] Checking green health (interno)..."
+              if docker compose exec -T api-green curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
+                GREEN_HEALTHY=true
+                break
+              fi
+              sleep 2
             done
 
             if [ "$GREEN_HEALTHY" = false ]; then
