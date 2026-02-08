@@ -1,0 +1,246 @@
+name: Blue-Green Deploy
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/amo0802
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build & test api-service
+        run: mvn -f api-service/pom.xml -q verify
+
+      - name: Upload api-service JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target/*.jar
+
+  docker-push:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download api-service JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Build & push api-service image
+        run: |
+          docker build -f api-service/Dockerfile.ci \
+            -t ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }} \
+            -t ${{ env.IMAGE_PREFIX }}/api-service:latest \
+            api-service
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }}
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:latest
+
+  deploy-blue-green:
+    runs-on: ubuntu-latest
+    needs: docker-push
+    steps:
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Blue-Green deploy + rollback experiment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "========================================="
+            echo "  BLUE-GREEN DEPLOYMENT EXPERIMENT"
+            echo "========================================="
+
+            # --- Login i priprema ---
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            cd /opt/diplomski/infra
+
+            NEW_TAG="${{ env.SHORT_SHA }}"
+            echo "Novi image tag: $NEW_TAG"
+
+            # =========================================
+            # FAZA 1: Podigni green sa novim image-om
+            # =========================================
+            echo ""
+            echo ">>> FAZA 1: Podižem api-green sa novim image-om..."
+
+            export GREEN_TAG=$NEW_TAG
+            docker compose pull api-green
+            docker compose --profile green up -d api-green
+
+            # Čekaj da green bude zdrav interno (direktno na kontejner port)
+            GREEN_HEALTHY=false
+            for i in $(seq 1 30); do
+              echo "[$i/30] Checking green health (interno)..."
+              if docker compose exec -T api-green curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
+                GREEN_HEALTHY=true
+                break
+              fi
+              sleep 2
+            done
+
+            if [ "$GREEN_HEALTHY" = false ]; then
+              echo "GREŠKA: api-green nije zdrav! Gasim green."
+              docker compose --profile green stop api-green
+              exit 1
+            fi
+
+            echo "✅ api-green je zdrav"
+
+            # =========================================
+            # FAZA 2: Prebaci Traefik sa blue na green
+            # =========================================
+            echo ""
+            echo ">>> FAZA 2: Prebacujem Traefik sa blue na green..."
+
+            SWITCHOVER_START=$(date +%s%3N)
+
+            # Zamijeni service u dynamic.yml
+            sed -i 's/service: api-blue/service: api-green/' /opt/diplomski/infra/traefik/dynamic.yml
+
+            # Traefik watch detektuje promjenu, čekaj health check kroz Traefik
+            SWITCH_OK=false
+            for i in $(seq 1 20); do
+              echo "[$i/20] Checking /actuator/health kroz Traefik..."
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
+                SWITCH_OK=true
+                break
+              fi
+              sleep 1
+            done
+
+            SWITCHOVER_END=$(date +%s%3N)
+            SWITCHOVER_MS=$((SWITCHOVER_END - SWITCHOVER_START))
+
+            if [ "$SWITCH_OK" = false ]; then
+              echo "GREŠKA: Health check nije prošao nakon prebacivanja!"
+              # Rollback Traefik na blue
+              sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
+              docker compose --profile green stop api-green
+              exit 1
+            fi
+
+            echo "✅ Traefik prebačen na green"
+            echo "⏱️  SWITCHOVER TIME: ${SWITCHOVER_MS}ms"
+
+            # =========================================
+            # FAZA 3: Provjeri /notifycheck
+            # =========================================
+            echo ""
+            echo ">>> FAZA 3: Provjera /notifycheck..."
+
+            NOTIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/notifycheck || true)
+            echo "/notifycheck HTTP status: $NOTIFY_STATUS"
+
+            if [ "$NOTIFY_STATUS" = "200" ]; then
+              echo "✅ /notifycheck PROŠAO - deploy uspješan!"
+              # Ugasi stari blue
+              docker compose stop api-blue
+              echo ""
+              echo "========================================="
+              echo "  REZULTATI"
+              echo "========================================="
+              echo "SWITCHOVER TIME: ${SWITCHOVER_MS}ms"
+              echo "ROLLBACK:        nije bio potreban"
+              echo "========================================="
+              exit 0
+            fi
+
+            echo "❌ /notifycheck FAILED - pokrećem rollback..."
+
+            # =========================================
+            # FAZA 4: Rollback - Traefik nazad na blue
+            # =========================================
+            echo ""
+            echo ">>> FAZA 4: Rollback - prebacujem Traefik nazad na blue..."
+
+            ROLLBACK_START=$(date +%s%3N)
+
+            # Vrati Traefik na blue
+            sed -i 's/service: api-green/service: api-blue/' /opt/diplomski/infra/traefik/dynamic.yml
+
+            # Čekaj da blue odgovara kroz Traefik
+            ROLLBACK_OK=false
+            for i in $(seq 1 20); do
+              echo "[$i/20] Checking /actuator/health kroz Traefik (blue)..."
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
+                ROLLBACK_OK=true
+                break
+              fi
+              sleep 1
+            done
+
+            # Provjeri notifycheck nakon rollback-a
+            NOTIFY_OK=false
+            for i in $(seq 1 10); do
+              echo "[$i/10] Checking /notifycheck (blue)..."
+              if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
+                NOTIFY_OK=true
+                break
+              fi
+              sleep 2
+            done
+
+            ROLLBACK_END=$(date +%s%3N)
+            ROLLBACK_MS=$((ROLLBACK_END - ROLLBACK_START))
+
+            # Ugasi green
+            docker compose --profile green stop api-green
+
+            if [ "$ROLLBACK_OK" = true ]; then
+              echo "✅ /actuator/health PASSED nakon rollback-a"
+            else
+              echo "⚠️  /actuator/health FAILED nakon rollback-a"
+            fi
+
+            if [ "$NOTIFY_OK" = true ]; then
+              echo "✅ /notifycheck PASSED nakon rollback-a"
+            else
+              echo "⚠️  /notifycheck FAILED nakon rollback-a"
+            fi
+
+            # =========================================
+            # REZULTATI
+            # =========================================
+            echo ""
+            echo "========================================="
+            echo "  REZULTATI BLUE-GREEN EKSPERIMENTA"
+            echo "========================================="
+            echo "SWITCHOVER TIME: ${SWITCHOVER_MS}ms ($(echo "scale=2; $SWITCHOVER_MS/1000" | bc)s)"
+            echo "ROLLBACK TIME:   ${ROLLBACK_MS}ms ($(echo "scale=2; $ROLLBACK_MS/1000" | bc)s)"
+            echo "NOVI TAG:        $NEW_TAG"
+            echo "========================================="
