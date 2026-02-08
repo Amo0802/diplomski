@@ -1,160 +1,227 @@
-deploy-recreate:
-  runs-on: ubuntu-latest
-  needs: docker-push
-  steps:
-    - name: Set short SHA
-      run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+name: Recreate Deploy
 
-    - name: Recreate deploy + rollback experiment
-      uses: appleboy/ssh-action@v1
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SERVER_SSH_KEY }}
-        script: |
-          set -e
+on:
+  workflow_dispatch:
 
-          echo "========================================="
-          echo "  RECREATE DEPLOYMENT EXPERIMENT"
-          echo "========================================="
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/amo0802
 
-          # --- Login i priprema ---
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          cd /opt/diplomski/infra
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          # --- Sačuvaj stari image tag za rollback ---
-          OLD_TAG=$(docker inspect $(docker compose ps -q api-blue) --format '{{ index .Config.Image }}' | cut -d: -f2)
-          echo "Trenutni (stari) image tag: $OLD_TAG"
-          echo "Novi image tag: ${{ env.SHORT_SHA }}"
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
 
-          # --- Pull SAMO novi api-service image ---
-          docker pull ghcr.io/amo0802/api-service:${{ env.SHORT_SHA }}
+      - name: Build & test api-service
+        run: mvn -f api-service/pom.xml -q verify
 
-          # =========================================
-          # FAZA 1: RECREATE DEPLOY (mjerenje downtime-a)
-          # =========================================
-          echo ""
-          echo ">>> FAZA 1: Zaustavljam api-blue i pokrećem novu verziju..."
+      - name: Upload api-service JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target/*.jar
 
-          # Zaustavi stari kontejner
-          docker compose stop api-blue
+  docker-push:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          # Započni mjerenje downtime-a
-          DOWNTIME_START=$(date +%s%3N)
+      - name: Download api-service JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: api-service-jar
+          path: api-service/target
 
-          # Pokreni novu verziju
-          export IMAGE_TAG=${{ env.SHORT_SHA }}
-          docker compose up -d api-blue
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-          # Čekaj /actuator/health (max 30 pokušaja, svake 2s)
-          HEALTH_OK=false
-          for i in $(seq 1 30); do
-            echo "[$i/30] Checking /actuator/health..."
-            if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
-              HEALTH_OK=true
-              break
-            fi
-            sleep 2
-          done
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-          DOWNTIME_END=$(date +%s%3N)
-          DOWNTIME_MS=$((DOWNTIME_END - DOWNTIME_START))
+      - name: Build & push api-service image
+        run: |
+          docker build -f api-service/Dockerfile.ci \
+            -t ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }} \
+            -t ${{ env.IMAGE_PREFIX }}/api-service:latest \
+            api-service
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:${{ env.SHORT_SHA }}
+          docker push ${{ env.IMAGE_PREFIX }}/api-service:latest
 
-          if [ "$HEALTH_OK" = false ]; then
-            echo "GREŠKA: /actuator/health nije prošao nakon 30 pokušaja!"
-            echo "DOWNTIME: ${DOWNTIME_MS}ms (health check NIJE prošao)"
-            exit 1
-          fi
+  deploy-recreate:
+    runs-on: ubuntu-latest
+    needs: docker-push
+    steps:
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-          echo "✅ /actuator/health PASSED"
-          echo "⏱️  DOWNTIME: ${DOWNTIME_MS}ms"
+      - name: Recreate deploy + rollback experiment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
 
-          # --- Provjeri /notifycheck (očekujemo FAIL) ---
-          echo ""
-          echo ">>> Provjera /notifycheck (očekujemo grešku)..."
-          NOTIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/notifycheck || true)
-          echo "/notifycheck HTTP status: $NOTIFY_STATUS"
+            echo "========================================="
+            echo "  RECREATE DEPLOYMENT EXPERIMENT"
+            echo "========================================="
 
-          if [ "$NOTIFY_STATUS" = "200" ]; then
-            echo "⚠️  /notifycheck PROŠAO - nije očekivano! Nema potrebe za rollback."
+            # --- Login i priprema ---
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            cd /opt/diplomski/infra
+
+            # --- Sačuvaj stari image tag za rollback ---
+            OLD_TAG=$(docker inspect $(docker compose ps -q api-blue) --format '{{ index .Config.Image }}' | cut -d: -f2)
+            echo "Trenutni (stari) image tag: $OLD_TAG"
+            echo "Novi image tag: ${{ env.SHORT_SHA }}"
+
+            # --- Pull novi image ---
+            docker pull ghcr.io/amo0802/api-service:${{ env.SHORT_SHA }}
+
+            # =========================================
+            # FAZA 1: RECREATE DEPLOY (mjerenje downtime-a)
+            # =========================================
             echo ""
-            echo "========================================="
-            echo "  REZULTATI"
-            echo "========================================="
-            echo "DOWNTIME:       ${DOWNTIME_MS}ms"
-            echo "ROLLBACK:       nije bio potreban"
-            echo "========================================="
-            exit 0
-          fi
+            echo ">>> FAZA 1: Zaustavljam api-blue i pokrećem novu verziju..."
 
-          echo "❌ /notifycheck FAILED (očekivano) - pokrećem rollback..."
+            # Zaustavi stari kontejner
+            docker compose stop api-blue
 
-          # =========================================
-          # FAZA 2: ROLLBACK (mjerenje rollback vremena)
-          # =========================================
-          echo ""
-          echo ">>> FAZA 2: Rollback na prethodnu verziju ($OLD_TAG)..."
+            # Započni mjerenje downtime-a
+            DOWNTIME_START=$(date +%s%3N)
 
-          # Započni mjerenje rollback-a
-          ROLLBACK_START=$(date +%s%3N)
+            # Pokreni novu verziju
+            export IMAGE_TAG=${{ env.SHORT_SHA }}
+            docker compose up -d api-blue
 
-          # Zaustavi novu (buggy) verziju
-          docker compose stop api-blue
+            # Čekaj /actuator/health (max 30 pokušaja, svake 2s)
+            HEALTH_OK=false
+            for i in $(seq 1 30); do
+              echo "[$i/30] Checking /actuator/health..."
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
+                HEALTH_OK=true
+                break
+              fi
+              sleep 2
+            done
 
-          # Vrati stari image
-          export IMAGE_TAG=$OLD_TAG
-          docker compose up -d api-blue
+            DOWNTIME_END=$(date +%s%3N)
+            DOWNTIME_MS=$((DOWNTIME_END - DOWNTIME_START))
 
-          # Čekaj /actuator/health (max 30 pokušaja, svake 2s)
-          HEALTH_OK=false
-          for i in $(seq 1 30); do
-            echo "[$i/30] Checking /actuator/health..."
-            if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
-              HEALTH_OK=true
-              break
+            if [ "$HEALTH_OK" = false ]; then
+              echo "GREŠKA: /actuator/health nije prošao nakon 30 pokušaja!"
+              echo "DOWNTIME: ${DOWNTIME_MS}ms (health check NIJE prošao)"
+              exit 1
             fi
-            sleep 2
-          done
 
-          if [ "$HEALTH_OK" = false ]; then
-            echo "GREŠKA: /actuator/health nije prošao nakon rollback-a!"
+            echo "✅ /actuator/health PASSED"
+            echo "⏱️  DOWNTIME: ${DOWNTIME_MS}ms"
+
+            # --- Provjeri /notifycheck (očekujemo FAIL) ---
+            echo ""
+            echo ">>> Provjera /notifycheck (očekujemo grešku)..."
+            NOTIFY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/notifycheck || true)
+            echo "/notifycheck HTTP status: $NOTIFY_STATUS"
+
+            if [ "$NOTIFY_STATUS" = "200" ]; then
+              echo "⚠️  /notifycheck PROŠAO - nije očekivano! Nema potrebe za rollback."
+              echo ""
+              echo "========================================="
+              echo "  REZULTATI"
+              echo "========================================="
+              echo "DOWNTIME:       ${DOWNTIME_MS}ms"
+              echo "ROLLBACK:       nije bio potreban"
+              echo "========================================="
+              exit 0
+            fi
+
+            echo "❌ /notifycheck FAILED (očekivano) - pokrećem rollback..."
+
+            # =========================================
+            # FAZA 2: ROLLBACK (mjerenje rollback vremena)
+            # =========================================
+            echo ""
+            echo ">>> FAZA 2: Rollback na prethodnu verziju ($OLD_TAG)..."
+
+            # Započni mjerenje rollback-a
+            ROLLBACK_START=$(date +%s%3N)
+
+            # Zaustavi novu (buggy) verziju
+            docker compose stop api-blue
+
+            # Vrati stari image
+            export IMAGE_TAG=$OLD_TAG
+            docker compose up -d api-blue
+
+            # Čekaj /actuator/health (max 30 pokušaja, svake 2s)
+            HEALTH_OK=false
+            for i in $(seq 1 30); do
+              echo "[$i/30] Checking /actuator/health..."
+              if curl -fsS http://localhost/actuator/health >/dev/null 2>&1; then
+                HEALTH_OK=true
+                break
+              fi
+              sleep 2
+            done
+
+            if [ "$HEALTH_OK" = false ]; then
+              echo "GREŠKA: /actuator/health nije prošao nakon rollback-a!"
+              ROLLBACK_END=$(date +%s%3N)
+              ROLLBACK_MS=$((ROLLBACK_END - ROLLBACK_START))
+              echo "ROLLBACK FAILED nakon ${ROLLBACK_MS}ms"
+              exit 1
+            fi
+
+            echo "✅ /actuator/health PASSED nakon rollback-a"
+
+            # Čekaj /notifycheck (max 10 pokušaja, svake 2s)
+            NOTIFY_OK=false
+            for i in $(seq 1 10); do
+              echo "[$i/10] Checking /notifycheck..."
+              if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
+                NOTIFY_OK=true
+                break
+              fi
+              sleep 2
+            done
+
             ROLLBACK_END=$(date +%s%3N)
             ROLLBACK_MS=$((ROLLBACK_END - ROLLBACK_START))
-            echo "ROLLBACK FAILED nakon ${ROLLBACK_MS}ms"
-            exit 1
-          fi
 
-          echo "✅ /actuator/health PASSED nakon rollback-a"
-
-          # Čekaj /notifycheck (max 10 pokušaja, svake 2s)
-          NOTIFY_OK=false
-          for i in $(seq 1 10); do
-            echo "[$i/10] Checking /notifycheck..."
-            if curl -fsS http://localhost/notifycheck >/dev/null 2>&1; then
-              NOTIFY_OK=true
-              break
+            if [ "$NOTIFY_OK" = false ]; then
+              echo "⚠️  /notifycheck FAILED i nakon rollback-a!"
+            else
+              echo "✅ /notifycheck PASSED nakon rollback-a"
             fi
-            sleep 2
-          done
 
-          ROLLBACK_END=$(date +%s%3N)
-          ROLLBACK_MS=$((ROLLBACK_END - ROLLBACK_START))
-
-          if [ "$NOTIFY_OK" = false ]; then
-            echo "⚠️  /notifycheck FAILED i nakon rollback-a!"
-          else
-            echo "✅ /notifycheck PASSED nakon rollback-a"
-          fi
-
-          # =========================================
-          # REZULTATI
-          # =========================================
-          echo ""
-          echo "========================================="
-          echo "  REZULTATI RECREATE EKSPERIMENTA"
-          echo "========================================="
-          echo "DOWNTIME:       ${DOWNTIME_MS}ms ($(echo "scale=2; $DOWNTIME_MS/1000" | bc)s)"
-          echo "ROLLBACK TIME:  ${ROLLBACK_MS}ms ($(echo "scale=2; $ROLLBACK_MS/1000" | bc)s)"
-          echo "STARI TAG:      $OLD_TAG"
-          echo "NOVI TAG:       ${{ env.SHORT_SHA }}"
-          echo "========================================="
+            # =========================================
+            # REZULTATI
+            # =========================================
+            echo ""
+            echo "========================================="
+            echo "  REZULTATI RECREATE EKSPERIMENTA"
+            echo "========================================="
+            echo "DOWNTIME:       ${DOWNTIME_MS}ms ($(echo "scale=2; $DOWNTIME_MS/1000" | bc)s)"
+            echo "ROLLBACK TIME:  ${ROLLBACK_MS}ms ($(echo "scale=2; $ROLLBACK_MS/1000" | bc)s)"
+            echo "STARI TAG:      $OLD_TAG"
+            echo "NOVI TAG:       ${{ env.SHORT_SHA }}"
+            echo "========================================="
