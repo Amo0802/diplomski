@@ -100,8 +100,8 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             cd /opt/diplomski/infra
             export IMAGE_TAG=${{ env.SHORT_SHA }}
-            docker compose -f docker-compose.yml pull
-            docker compose -f docker-compose.yml up -d
+            docker compose -f docker-compose.cicd.yml pull
+            docker compose -f docker-compose.cicd.yml up -d
 
       - name: Health check - actuator (10x, every 2s)
         env:

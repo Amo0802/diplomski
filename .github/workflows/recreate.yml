@@ -90,7 +90,13 @@ jobs:
             cd /opt/diplomski/infra
 
             # --- Sačuvaj stari image tag za rollback ---
-            OLD_TAG=$(docker inspect $(docker compose ps -q api-blue) --format '{{ index .Config.Image }}' | cut -d: -f2)
+            TAG_FILE=/opt/diplomski/infra/.last_deployed_tag
+            if [ -f "$TAG_FILE" ]; then
+              OLD_TAG=$(cat "$TAG_FILE")
+            else
+              OLD_TAG="e07a52b"
+              echo "⚠️  Tag fajl ne postoji, koristim fallback: $OLD_TAG"
+            fi
             echo "Trenutni (stari) image tag: $OLD_TAG"
             echo "Novi image tag: ${{ env.SHORT_SHA }}"
 
@@ -144,6 +150,7 @@ jobs:
 
             if [ "$NOTIFY_STATUS" = "200" ]; then
               echo "⚠️  /notifycheck PROŠAO - nije očekivano! Nema potrebe za rollback."
+              echo "${{ env.SHORT_SHA }}" > "$TAG_FILE"
               echo ""
               echo "========================================="
               echo "  REZULTATI"
@@ -212,6 +219,9 @@ jobs:
             else
               echo "✅ /notifycheck PASSED nakon rollback-a"
             fi
+
+            # --- Sačuvaj stari tag kao aktivan (rollback je uspješan) ---
+            echo "$OLD_TAG" > "$TAG_FILE"
 
             # =========================================
             # REZULTATI
