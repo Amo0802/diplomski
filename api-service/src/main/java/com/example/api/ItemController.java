@@ -12,8 +12,6 @@ import java.util.Map;
 @RequestMapping("/items")
 public class ItemController {
 
-    //Test 1 cicd eks 3 b
-
     private final ItemRepo repo;
 
     public ItemController(ItemRepo repo) {
